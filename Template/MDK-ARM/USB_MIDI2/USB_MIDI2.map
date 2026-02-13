@@ -3690,35 +3690,35 @@ Image component sizes
 
       Code (inc. data)   RO Data    RW Data    ZI Data      Debug   Object Name
 
-      3598          0          0          0        291      32537   dcd_stm32_fsdev.o
-       214          0          0          0          0       2749   fsdev_common.o
-       556          0          0          0        764      13224   main.o
-      1176          0          0          0        192      16762   midi_device.o
-        68         28        596          0       1536       1028   startup_stm32h533xx.o
-       282          0          0          8          4      14477   stm32h5xx_hal.o
-       354          6          0          0          0      14159   stm32h5xx_hal_cortex.o
-       132          0          0          0          0       7185   stm32h5xx_hal_exti.o
-       420          0          0          0          0       5304   stm32h5xx_hal_gpio.o
-       114          0          0          0          0       9313   stm32h5xx_hal_msp.o
-       598          0          0          0          0      17243   stm32h5xx_hal_pcd.o
-        34          0          0          0          0       5619   stm32h5xx_hal_pcd_ex.o
-        18          0          0          0          0       7470   stm32h5xx_hal_pwr_ex.o
-      2766         16          0          0          0      12813   stm32h5xx_hal_rcc.o
-      7138        336          0          0          0      23441   stm32h5xx_hal_rcc_ex.o
-      2084          0         24          0          0      39211   stm32h5xx_hal_uart.o
-        32          0          0          0          0       1849   stm32h5xx_it.o
-       130          0          0          0          0      34014   stm32h5xx_ll_usb.o
-       396          0          0          4        160      15644   stm32h5xx_nucleo.o
-       174          0         24          4          0       5964   system_stm32h5xx.o
-      1018          0          0          0          2      14251   tusb.o
-      2448          0          0          0          0      30006   tusb_fifo.o
-         2          0          0          0          0        774   tusb_port.o
-       252          0        184         20         64       3246   usb_descriptors.o
-      3898         46         36         24        259      33942   usbd.o
-       674          0          0          0         84       5975   usbd_control.o
+      3598          0          0          0        291      32493   dcd_stm32_fsdev.o
+       214          0          0          0          0       2705   fsdev_common.o
+       556          0          0          0        764      13180   main.o
+      1176          0          0          0        192      16718   midi_device.o
+        68         28        596          0       1536        984   startup_stm32h533xx.o
+       282          0          0          8          4      14433   stm32h5xx_hal.o
+       354          6          0          0          0      14115   stm32h5xx_hal_cortex.o
+       132          0          0          0          0       7141   stm32h5xx_hal_exti.o
+       420          0          0          0          0       5260   stm32h5xx_hal_gpio.o
+       114          0          0          0          0       9269   stm32h5xx_hal_msp.o
+       598          0          0          0          0      17199   stm32h5xx_hal_pcd.o
+        34          0          0          0          0       5575   stm32h5xx_hal_pcd_ex.o
+        18          0          0          0          0       7426   stm32h5xx_hal_pwr_ex.o
+      2766         16          0          0          0      12769   stm32h5xx_hal_rcc.o
+      7138        336          0          0          0      23397   stm32h5xx_hal_rcc_ex.o
+      2084          0         24          0          0      39167   stm32h5xx_hal_uart.o
+        32          0          0          0          0       1805   stm32h5xx_it.o
+       130          0          0          0          0      33970   stm32h5xx_ll_usb.o
+       396          0          0          4        160      15600   stm32h5xx_nucleo.o
+       174          0         24          4          0       5920   system_stm32h5xx.o
+      1018          0          0          0          2      14207   tusb.o
+      2448          0          0          0          0      29962   tusb_fifo.o
+         2          0          0          0          0        730   tusb_port.o
+       252          0        184         20         64       3202   usb_descriptors.o
+      3898         46         36         24        259      33898   usbd.o
+       674          0          0          0         84       5931   usbd_control.o
 
     ----------------------------------------------------------------------
-     28724        432        898         60       3372     368200   Object Totals
+     28724        432        898         60       3372     367056   Object Totals
          0          0         32          0          0          0   (incl. Generated)
        148          0          2          0         16          0   (incl. Padding)
 
@@ -3775,8 +3775,8 @@ Image component sizes
 
       Code (inc. data)   RO Data    RW Data    ZI Data      Debug   
 
-     29762        448        898         60       3468     368492   Grand Totals
-     29762        448        898         60       3468     368492   ELF Image Totals
+     29762        448        898         60       3468     367348   Grand Totals
+     29762        448        898         60       3468     367348   ELF Image Totals
      29762        448        898         60          0          0   ROM Totals
 
 ==============================================================================
