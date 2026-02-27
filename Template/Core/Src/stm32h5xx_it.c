@@ -219,9 +219,10 @@ void EXTI13_IRQHandler(void)
 void USB_DRD_FS_IRQHandler(void)
 {
   /* USER CODE BEGIN USB_DRD_FS_IRQn 0 */
-
-  /* USER CODE END USB_DRD_FS_IRQn 0 */
   tud_int_handler(0);
+  return;
+  /* USER CODE END USB_DRD_FS_IRQn 0 */
+  HAL_PCD_IRQHandler(&hpcd_USB_DRD_FS);
   /* USER CODE BEGIN USB_DRD_FS_IRQn 1 */
 
   /* USER CODE END USB_DRD_FS_IRQn 1 */
