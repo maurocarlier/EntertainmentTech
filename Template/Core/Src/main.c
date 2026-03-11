@@ -55,20 +55,33 @@
 
 COM_InitTypeDef BspCOMInit;
 
-SPI_HandleTypeDef hspi2;
+SPI_HandleTypeDef hspi1;
 
 PCD_HandleTypeDef hpcd_USB_DRD_FS;
 
 /* USER CODE BEGIN PV */
 static uint8_t matrix_prev[16] = {0};
 static uint8_t mcp_ready = 0;
+// Debug: 0=not tested, 1=SPI OK, 0xFF=SPI FAILED
+static uint8_t mcp_spi_ok = 0;
+// Debug: last raw row read from MCP (visible in debugger)
+volatile uint8_t dbg_last_rows = 0;
+volatile uint32_t dbg_scan_count = 0;
+// Debug: GPIOB value right after mcp_init (should be 0x0F if pull-ups work and no buttons pressed)
+volatile uint8_t dbg_init_gpiob = 0;
+// Debug: IODIRA read BEFORE init (power-on default = 0xFF). If 0x00 = MISO floating!
+volatile uint8_t dbg_pre_init_iodira = 0;
+// Debug: GPPUB readback after writing 0x0F (should be 0x0F if SPI writes work)
+volatile uint8_t dbg_gppub_readback = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USB_PCD_Init(void);
-static void MX_SPI2_Init(void);
+static void MX_SPI1_Init(void);
+static void MX_ICACHE_Init(void);
 /* USER CODE BEGIN PFP */
 void midi_note_on(uint8_t note, uint8_t velocity);
 void midi_note_off(uint8_t note);
@@ -96,7 +109,7 @@ void mcp_write(uint8_t reg, uint8_t val)
 {
   uint8_t tx[3] = { MCP_WRITE_OP, reg, val };
   HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_RESET);
-  HAL_SPI_Transmit(&hspi2, tx, 3, SPI_TIMEOUT);
+  HAL_SPI_Transmit(&hspi1, tx, 3, SPI_TIMEOUT);
   HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_SET);
 }
 
@@ -105,30 +118,57 @@ uint8_t mcp_read(uint8_t reg)
   uint8_t tx[3] = { MCP_READ_OP, reg, 0x00 };
   uint8_t rx[3] = { 0, 0, 0 };
   HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_RESET);
-  HAL_SPI_TransmitReceive(&hspi2, tx, rx, 3, SPI_TIMEOUT);
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, 3, SPI_TIMEOUT);
   HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_SET);
   return rx[2];
 }
 
 void mcp_init(void)
 {
+  // Read IODIRA BEFORE writing - power-on default is 0xFF (all inputs)
+  // 0xFF -> SPI is working correctly
+  // 0x00 -> MISO is floating, SPI not communicating!
+  // 0xFF with pull-up fix, 0x00 without = confirms MISO pull-up was the issue
+  dbg_pre_init_iodira = mcp_read(MCP_IODIRA);
+
   mcp_write(MCP_IODIRA, 0x00);  // PORTA = all outputs (columns)
   mcp_write(MCP_IODIRB, 0xFF);  // PORTB = all inputs  (rows)
   mcp_write(MCP_GPPUB,  0x0F);  // pull-ups on GPB0-3
+
+  // Read back GPPUB - should be 0x0F if SPI writes are working
+  dbg_gppub_readback = mcp_read(MCP_GPPUB);
+
   mcp_write(MCP_OLATA,  0xFF);  // all columns HIGH (idle)
+
+  // Determine SPI status from pre-init IODIRA read
+  // 0xFF = chip responded correctly (default value)
+  // anything else = SPI suspect
+  if (dbg_pre_init_iodira == 0xFF)
+  {
+    mcp_spi_ok = 1;  // SPI confirmed working
+    // 5 fast blinks = MCP OK
+    for (int i = 0; i < 5; i++) {
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);  HAL_Delay(80);
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); HAL_Delay(80);
+    }
+  }
+  else
+  {
+    mcp_spi_ok = 0xFF;  // SPI FAILED - check wiring/power!
+    // 10 fast blinks = MCP FAILED
+    for (int i = 0; i < 10; i++) {
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);  HAL_Delay(40);
+      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); HAL_Delay(40);
+    }
+  }
+
   mcp_ready = 1;
 }
 
 void scan_matrix(void)
 {
-  // Wait until USB is mounted before doing anything
+  // Wait until USB is mounted before sending MIDI
   if (!tud_mounted()) return;
-
-  // Lazy init: only call mcp_init() once, after USB is up
-  if (!mcp_ready) {
-    mcp_init();
-    return;
-  }
 
   // Rate-limit scan to every 5 ms
   static uint32_t last_scan = 0;
@@ -151,6 +191,8 @@ void scan_matrix(void)
 
     // Read row inputs (active LOW = pressed)
     uint8_t rows = mcp_read(MCP_GPIOB) & 0x0F;
+    dbg_last_rows = rows;  // visible in Keil debugger watch window
+    dbg_scan_count++;
 
     // Restore all columns HIGH
     mcp_write(MCP_OLATA, 0xFF);
@@ -163,12 +205,12 @@ void scan_matrix(void)
       if (pressed && !matrix_prev[btn])
       {
         midi_note_on((uint8_t)(MIDI_NOTE_BASE + btn), 100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
       }
       else if (!pressed && matrix_prev[btn])
       {
         midi_note_off((uint8_t)(MIDI_NOTE_BASE + btn));
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
       }
       matrix_prev[btn] = pressed;
     }
@@ -199,45 +241,54 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
+  /* Configure the peripherals common clocks */
+  PeriphCommonClock_Config();
+
   /* USER CODE BEGIN SysInit */
-  // --- DEBUG LED on PA5 (onboard LED2) ---
-  __HAL_RCC_GPIOA_CLK_ENABLE();
+  // --- DEBUG LED on PB0 (LED_STATUS) ---
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   {
     GPIO_InitTypeDef gi = {0};
-    gi.Pin   = GPIO_PIN_5;
+    gi.Pin   = GPIO_PIN_0;
     gi.Mode  = GPIO_MODE_OUTPUT_PP;
     gi.Pull  = GPIO_NOPULL;
     gi.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOA, &gi);
+    HAL_GPIO_Init(GPIOB, &gi);
   }
   // 1 blink = past SystemClock_Config
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
   HAL_Delay(200);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
   HAL_Delay(200);
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USB_PCD_Init();
-  MX_SPI2_Init();
+  MX_SPI1_Init();
+  MX_ICACHE_Init();
   /* USER CODE BEGIN 2 */
   // 2 blinks = past SPI init
   for (int i = 0; i < 2; i++) {
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
     HAL_Delay(150);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
     HAL_Delay(150);
   }
+
+  // Init MCP23S17 BEFORE USB starts - safe because USB not running yet
+  // LED blinks after this show if SPI works (5 blinks = OK, 10 blinks = FAILED)
+  mcp_init();
+  dbg_init_gpiob = mcp_read(MCP_GPIOB) & 0x0F;
 
   // Initialize tinyUSB
   tusb_init();
 
   // 3 blinks = past tusb_init
   for (int i = 0; i < 3; i++) {
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
     HAL_Delay(100);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
     HAL_Delay(100);
   }
 
@@ -325,50 +376,50 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief SPI2 Initialization Function
+  * @brief SPI1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI2_Init(void)
+static void MX_SPI1_Init(void)
 {
 
-  /* USER CODE BEGIN SPI2_Init 0 */
+  /* USER CODE BEGIN SPI1_Init 0 */
 
-  /* USER CODE END SPI2_Init 0 */
+  /* USER CODE END SPI1_Init 0 */
 
-  /* USER CODE BEGIN SPI2_Init 1 */
+  /* USER CODE BEGIN SPI1_Init 1 */
 
-  /* USER CODE END SPI2_Init 1 */
-  /* SPI2 parameter configuration*/
-  hspi2.Instance = SPI2;
-  hspi2.Init.Mode = SPI_MODE_MASTER;
-  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;
-  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
-  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi2.Init.CRCPolynomial = 0x7;
-  hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
-  hspi2.Init.NSSPolarity = SPI_NSS_POLARITY_LOW;
-  hspi2.Init.FifoThreshold = SPI_FIFO_THRESHOLD_01DATA;
-  hspi2.Init.MasterSSIdleness = SPI_MASTER_SS_IDLENESS_00CYCLE;
-  hspi2.Init.MasterInterDataIdleness = SPI_MASTER_INTERDATA_IDLENESS_00CYCLE;
-  hspi2.Init.MasterReceiverAutoSusp = SPI_MASTER_RX_AUTOSUSP_DISABLE;
-  hspi2.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_DISABLE;
-  hspi2.Init.IOSwap = SPI_IO_SWAP_DISABLE;
-  hspi2.Init.ReadyMasterManagement = SPI_RDY_MASTER_MANAGEMENT_INTERNALLY;
-  hspi2.Init.ReadyPolarity = SPI_RDY_POLARITY_HIGH;
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 0x7;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+  hspi1.Init.NSSPolarity = SPI_NSS_POLARITY_LOW;
+  hspi1.Init.FifoThreshold = SPI_FIFO_THRESHOLD_01DATA;
+  hspi1.Init.MasterSSIdleness = SPI_MASTER_SS_IDLENESS_00CYCLE;
+  hspi1.Init.MasterInterDataIdleness = SPI_MASTER_INTERDATA_IDLENESS_00CYCLE;
+  hspi1.Init.MasterReceiverAutoSusp = SPI_MASTER_RX_AUTOSUSP_DISABLE;
+  hspi1.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_DISABLE;
+  hspi1.Init.IOSwap = SPI_IO_SWAP_DISABLE;
+  hspi1.Init.ReadyMasterManagement = SPI_RDY_MASTER_MANAGEMENT_INTERNALLY;
+  hspi1.Init.ReadyPolarity = SPI_RDY_POLARITY_HIGH;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
+  /* USER CODE BEGIN SPI1_Init 2 */
 
-  /* USER CODE END SPI2_Init 2 */
+  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -449,6 +500,31 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief Peripherals Common Clock Configuration
+  * @retval None
+  */
+void PeriphCommonClock_Config(void)
+{
+  RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_CKPER;
+  PeriphClkInitStruct.CkperClockSelection = RCC_CLKPSOURCE_HSI;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ICACHE Initialization Function
+  * @retval None
+  */
+static void MX_ICACHE_Init(void)
+{
+  // ICACHE not enabled in HAL config - skipped
+  (void)0;
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
