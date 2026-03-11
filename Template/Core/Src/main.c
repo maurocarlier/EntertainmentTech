@@ -31,7 +31,19 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+// MCP23S17 SPI opcodes (hardware address 0b000)
+#define MCP_WRITE_OP    0x40
+#define MCP_READ_OP     0x41
+// MCP23S17 registers (BANK=0 default)
+#define MCP_IODIRA      0x00
+#define MCP_IODIRB      0x01
+#define MCP_GPPUB       0x0D
+#define MCP_OLATA       0x14
+#define MCP_GPIOB       0x13
+#define SPI_TIMEOUT     2
+// MIDI
+#define MIDI_CHANNEL    0
+#define MIDI_NOTE_BASE  60
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -48,7 +60,8 @@ SPI_HandleTypeDef hspi2;
 PCD_HandleTypeDef hpcd_USB_DRD_FS;
 
 /* USER CODE BEGIN PV */
-
+static uint8_t matrix_prev[16] = {0};
+static uint8_t mcp_ready = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,12 +70,110 @@ static void MX_GPIO_Init(void);
 static void MX_USB_PCD_Init(void);
 static void MX_SPI2_Init(void);
 /* USER CODE BEGIN PFP */
-void midi_task(void);
+void midi_note_on(uint8_t note, uint8_t velocity);
+void midi_note_off(uint8_t note);
+void mcp_write(uint8_t reg, uint8_t val);
+uint8_t mcp_read(uint8_t reg);
+void mcp_init(void);
+void scan_matrix(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void midi_note_on(uint8_t note, uint8_t velocity)
+{
+  uint8_t msg[3] = { (uint8_t)(0x90 | MIDI_CHANNEL), note, velocity };
+  tud_midi_stream_write(0, msg, 3);
+}
 
+void midi_note_off(uint8_t note)
+{
+  uint8_t msg[3] = { (uint8_t)(0x80 | MIDI_CHANNEL), note, 0 };
+  tud_midi_stream_write(0, msg, 3);
+}
+
+void mcp_write(uint8_t reg, uint8_t val)
+{
+  uint8_t tx[3] = { MCP_WRITE_OP, reg, val };
+  HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi2, tx, 3, SPI_TIMEOUT);
+  HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_SET);
+}
+
+uint8_t mcp_read(uint8_t reg)
+{
+  uint8_t tx[3] = { MCP_READ_OP, reg, 0x00 };
+  uint8_t rx[3] = { 0, 0, 0 };
+  HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_RESET);
+  HAL_SPI_TransmitReceive(&hspi2, tx, rx, 3, SPI_TIMEOUT);
+  HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_SET);
+  return rx[2];
+}
+
+void mcp_init(void)
+{
+  mcp_write(MCP_IODIRA, 0x00);  // PORTA = all outputs (columns)
+  mcp_write(MCP_IODIRB, 0xFF);  // PORTB = all inputs  (rows)
+  mcp_write(MCP_GPPUB,  0x0F);  // pull-ups on GPB0-3
+  mcp_write(MCP_OLATA,  0xFF);  // all columns HIGH (idle)
+  mcp_ready = 1;
+}
+
+void scan_matrix(void)
+{
+  // Wait until USB is mounted before doing anything
+  if (!tud_mounted()) return;
+
+  // Lazy init: only call mcp_init() once, after USB is up
+  if (!mcp_ready) {
+    mcp_init();
+    return;
+  }
+
+  // Rate-limit scan to every 5 ms
+  static uint32_t last_scan = 0;
+  uint32_t now = HAL_GetTick();
+  if (now - last_scan < 5) return;
+  last_scan = now;
+
+  // Drain any incoming MIDI packets
+  uint8_t packet[4];
+  while (tud_midi_available()) tud_midi_packet_read(packet);
+
+  // Scan each column
+  for (uint8_t col = 0; col < 4; col++)
+  {
+    // Drive this column LOW, all others HIGH
+    mcp_write(MCP_OLATA, (uint8_t)(~(1u << col)) & 0x0F);
+
+    // Short settle (~1 us at 32 MHz)
+    for (int i = 0; i < 32; i++) __NOP();
+
+    // Read row inputs (active LOW = pressed)
+    uint8_t rows = mcp_read(MCP_GPIOB) & 0x0F;
+
+    // Restore all columns HIGH
+    mcp_write(MCP_OLATA, 0xFF);
+
+    for (uint8_t row = 0; row < 4; row++)
+    {
+      uint8_t btn     = (uint8_t)(row * 4 + col);
+      uint8_t pressed = !(rows & (1u << row));
+
+      if (pressed && !matrix_prev[btn])
+      {
+        midi_note_on((uint8_t)(MIDI_NOTE_BASE + btn), 100);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+      }
+      else if (!pressed && matrix_prev[btn])
+      {
+        midi_note_off((uint8_t)(MIDI_NOTE_BASE + btn));
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+      }
+      matrix_prev[btn] = pressed;
+    }
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -153,11 +264,8 @@ int main(void)
     // tinyUSB device task
     tud_task();
 
-    // MIDI application task
-    midi_task();
-
-    // DEBUG: LED on = main loop is running
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+    // Scan 4x4 matrix via MCP23S17
+    scan_matrix();
 
     /* USER CODE END WHILE */
 
@@ -339,52 +447,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-//--------------------------------------------------------------------+
-// MIDI Task
-//--------------------------------------------------------------------+
-
-void midi_task(void)
-{
-  // The MIDI interface always creates input and output port/jack descriptors
-  // regardless of these being used or not. Therefore incoming traffic should be read
-  // (possibly just discarded) to avoid the sender blocking in IO
-  uint8_t packet[4];
-  while ( tud_midi_available() ) tud_midi_packet_read(packet);
-
-  // Example: Send a Note On message every second
-  static uint32_t start_ms = 0;
-  static bool note_on = false;
-
-  // Blink every 1000 ms
-  if (HAL_GetTick() - start_ms > 1000)
-  {
-    start_ms = HAL_GetTick();
-
-    // PA5 is now SPI1_SCK, no LED toggle
-
-    // Send MIDI Note On/Off
-    uint8_t cable_num = 0; // MIDI jack associated with USB endpoint
-    uint8_t channel = 0;   // 0 for channel 1
-    uint8_t note = 60;     // Middle C
-    uint8_t velocity = 100;
-
-    if (note_on)
-    {
-      // Note Off: 0x80 is channel message, 0x80 | channel is Note Off on channel 1
-      uint8_t note_off[3] = { 0x80 | channel, note, 0 };
-      tud_midi_stream_write(cable_num, note_off, 3);
-      note_on = false;
-    }
-    else
-    {
-      // Note On: 0x90 is channel message, 0x90 | channel is Note On on channel 1
-      uint8_t note_on_msg[3] = { 0x90 | channel, note, velocity };
-      tud_midi_stream_write(cable_num, note_on_msg, 3);
-      note_on = true;
-    }
-  }
-}
 
 /* USER CODE END 4 */
 

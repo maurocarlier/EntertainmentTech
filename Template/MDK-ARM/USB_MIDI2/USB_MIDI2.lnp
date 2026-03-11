@@ -16,6 +16,8 @@
 "usb_midi2\stm32h5xx_hal_pwr_ex.o"
 "usb_midi2\stm32h5xx_hal.o"
 "usb_midi2\stm32h5xx_hal_exti.o"
+"usb_midi2\stm32h5xx_hal_spi.o"
+"usb_midi2\stm32h5xx_hal_spi_ex.o"
 "usb_midi2\stm32h5xx_hal_pcd.o"
 "usb_midi2\stm32h5xx_hal_pcd_ex.o"
 "usb_midi2\stm32h5xx_ll_usb.o"
