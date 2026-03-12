@@ -10,7 +10,7 @@
  */
 
 #define USB_VID   0xCAFE  // Vendor ID (use your own or get one from USB-IF)
-#define USB_PID   0x4001  // Product ID
+#define USB_PID   0x4002  // Product ID (0x4002 = Mauro, uniek t.o.v. Jarno's 0x4001)
 #define USB_BCD   0x0200  // USB version 2.0
 
 //--------------------------------------------------------------------+
