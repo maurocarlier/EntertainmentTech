@@ -60,19 +60,8 @@ SPI_HandleTypeDef hspi1;
 PCD_HandleTypeDef hpcd_USB_DRD_FS;
 
 /* USER CODE BEGIN PV */
+/* Previous button state for each of the 16 matrix keys (used for edge detection) */
 static uint8_t matrix_prev[16] = {0};
-static uint8_t mcp_ready = 0;
-// Debug: 0=not tested, 1=SPI OK, 0xFF=SPI FAILED
-static uint8_t mcp_spi_ok = 0;
-// Debug: last raw row read from MCP (visible in debugger)
-volatile uint8_t dbg_last_rows = 0;
-volatile uint32_t dbg_scan_count = 0;
-// Debug: GPIOB value right after mcp_init (should be 0x0F if pull-ups work and no buttons pressed)
-volatile uint8_t dbg_init_gpiob = 0;
-// Debug: IODIRA read BEFORE init (power-on default = 0xFF). If 0x00 = MISO floating!
-volatile uint8_t dbg_pre_init_iodira = 0;
-// Debug: GPPUB readback after writing 0x0F (should be 0x0F if SPI writes work)
-volatile uint8_t dbg_gppub_readback = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -93,18 +82,22 @@ void scan_matrix(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* Send a MIDI Note On message on the configured channel */
 void midi_note_on(uint8_t note, uint8_t velocity)
 {
   uint8_t msg[3] = { (uint8_t)(0x90 | MIDI_CHANNEL), note, velocity };
   tud_midi_stream_write(0, msg, 3);
 }
 
+/* Send a MIDI Note Off message on the configured channel */
 void midi_note_off(uint8_t note)
 {
   uint8_t msg[3] = { (uint8_t)(0x80 | MIDI_CHANNEL), note, 0 };
   tud_midi_stream_write(0, msg, 3);
 }
 
+/* Write a single register on the MCP23S17 via SPI */
 void mcp_write(uint8_t reg, uint8_t val)
 {
   uint8_t tx[3] = { MCP_WRITE_OP, reg, val };
@@ -113,6 +106,7 @@ void mcp_write(uint8_t reg, uint8_t val)
   HAL_GPIO_WritePin(MCP_CS_GPIO_Port, MCP_CS_Pin, GPIO_PIN_SET);
 }
 
+/* Read a single register from the MCP23S17 via SPI */
 uint8_t mcp_read(uint8_t reg)
 {
   uint8_t tx[3] = { MCP_READ_OP, reg, 0x00 };
@@ -123,48 +117,16 @@ uint8_t mcp_read(uint8_t reg)
   return rx[2];
 }
 
+/* Configure the MCP23S17: PORTA as outputs (columns), PORTB as inputs with pull-ups (rows) */
 void mcp_init(void)
 {
-  // Read IODIRA BEFORE writing - power-on default is 0xFF (all inputs)
-  // 0xFF -> SPI is working correctly
-  // 0x00 -> MISO is floating, SPI not communicating!
-  // 0xFF with pull-up fix, 0x00 without = confirms MISO pull-up was the issue
-  dbg_pre_init_iodira = mcp_read(MCP_IODIRA);
-
   mcp_write(MCP_IODIRA, 0x00);  // PORTA = all outputs (columns)
-  mcp_write(MCP_IODIRB, 0xFF);  // PORTB = all inputs  (rows)
-  mcp_write(MCP_GPPUB,  0x0F);  // pull-ups on GPB0-3
-
-  // Read back GPPUB - should be 0x0F if SPI writes are working
-  dbg_gppub_readback = mcp_read(MCP_GPPUB);
-
-  mcp_write(MCP_OLATA,  0xFF);  // all columns HIGH (idle)
-
-  // Determine SPI status from pre-init IODIRA read
-  // 0xFF = chip responded correctly (default value)
-  // anything else = SPI suspect
-  if (dbg_pre_init_iodira == 0xFF)
-  {
-    mcp_spi_ok = 1;  // SPI confirmed working
-    // 5 fast blinks = MCP OK
-    for (int i = 0; i < 5; i++) {
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);  HAL_Delay(80);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); HAL_Delay(80);
-    }
-  }
-  else
-  {
-    mcp_spi_ok = 0xFF;  // SPI FAILED - check wiring/power!
-    // 10 fast blinks = MCP FAILED
-    for (int i = 0; i < 10; i++) {
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);  HAL_Delay(40);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); HAL_Delay(40);
-    }
-  }
-
-  mcp_ready = 1;
+  mcp_write(MCP_IODIRB, 0xFF);  // PORTB = all inputs (rows)
+  mcp_write(MCP_GPPUB,  0x0F);  // enable pull-ups on GPB0-3
+  mcp_write(MCP_OLATA,  0xFF);  // all columns HIGH (idle state)
 }
 
+/* Scan the 4x4 key matrix and send MIDI Note On/Off messages on state changes */
 void scan_matrix(void)
 {
   // Wait until USB is mounted before sending MIDI
@@ -191,8 +153,6 @@ void scan_matrix(void)
 
     // Read row inputs (active LOW = pressed)
     uint8_t rows = mcp_read(MCP_GPIOB) & 0x0F;
-    dbg_last_rows = rows;  // visible in Keil debugger watch window
-    dbg_scan_count++;
 
     // Restore all columns HIGH
     mcp_write(MCP_OLATA, 0xFF);
@@ -245,7 +205,7 @@ int main(void)
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  // --- DEBUG LED on PB0 (LED_STATUS) ---
+  /* Initialize LED_STATUS (PB0) - LED turns on when a button is pressed */
   __HAL_RCC_GPIOB_CLK_ENABLE();
   {
     GPIO_InitTypeDef gi = {0};
@@ -255,11 +215,6 @@ int main(void)
     gi.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOB, &gi);
   }
-  // 1 blink = past SystemClock_Config
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-  HAL_Delay(200);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-  HAL_Delay(200);
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -268,30 +223,11 @@ int main(void)
   MX_SPI1_Init();
   MX_ICACHE_Init();
   /* USER CODE BEGIN 2 */
-  // 2 blinks = past SPI init
-  for (int i = 0; i < 2; i++) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(150);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-    HAL_Delay(150);
-  }
-
-  // Init MCP23S17 BEFORE USB starts - safe because USB not running yet
-  // LED blinks after this show if SPI works (5 blinks = OK, 10 blinks = FAILED)
+  /* Initialize MCP23S17 I/O expander before USB starts */
   mcp_init();
-  dbg_init_gpiob = mcp_read(MCP_GPIOB) & 0x0F;
 
-  // Initialize tinyUSB
+  /* Start the tinyUSB device stack */
   tusb_init();
-
-  // 3 blinks = past tusb_init
-  for (int i = 0; i < 3; i++) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(100);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
-    HAL_Delay(100);
-  }
-
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
