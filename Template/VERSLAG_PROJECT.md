@@ -90,17 +90,75 @@ De controller fungeert als een standaard MIDI-instrument dat herkend wordt door 
 
 ### 3.1 Microcontroller Pins
 
-| Pin | Functie | Periphere | AF | Snelheid |
-|---|---|---|---|---|
-| PA5 | SPI1_SCK | AF5 | VERY_HIGH | 250 kHz |
-| PA6 | SPI1_MISO | AF5 | VERY_HIGH | Pull-up enabled |
-| PA7 | SPI1_MOSI | AF5 | VERY_HIGH | 250 kHz |
-| PA8 | MCP_CS (Chip Select) | GPIO Output | - | HIGH (idle) |
-| PA11 | USB_DM | AF10 | HIGH | USB Full-Speed |
-| PA12 | USB_DP | AF10 | HIGH | USB Full-Speed |
-| PB0 | LED_STATUS | GPIO Output | - | LOW | Feedback LED |
+| STM32 Pin | Nucleo Header | Functie | Periferie | Alt. Functie | Snelheid |
+|---|---|---|---|---|---|
+| PA5 | CN10 pin 11 | SPI1_SCK | SPI1 Master | AF5 | VERY_HIGH |
+| PA6 | CN10 pin 13 | SPI1_MISO | SPI1 Master | AF5 + Pull-up | VERY_HIGH |
+| PA7 | CN10 pin 15 | SPI1_MOSI | SPI1 Master | AF5 | VERY_HIGH |
+| PA8 | CN10 pin 23 | MCP_CS | GPIO Output | - (idle HIGH) | HIGH |
+| PA11 | CN10 pin 14 | USB_DM | USB DRD FS | AF10 | - |
+| PA12 | CN10 pin 12 | USB_DP | USB DRD FS | AF10 | - |
+| PB0 | CN10 pin 31 | LED_STATUS | GPIO Output | - | LOW |
 
-### 3.2 SPI Configuratie
+### 3.2 MCP23S17 Aansluitingen
+
+De MCP23S17 is een 28-pins DIP/SOIC I/O expander. Hier zijn alle pinnen en hun verbindingen:
+
+| MCP23S17 Pin | Naam | Verbinding | Beschrijving |
+|---|---|---|---|
+| 1 | GPB0 | Rij 0 van de matrix | Input, pull-up actief via GPPUB |
+| 2 | GPB1 | Rij 1 van de matrix | Input, pull-up actief via GPPUB |
+| 3 | GPB2 | Rij 2 van de matrix | Input, pull-up actief via GPPUB |
+| 4 | GPB3 | Rij 3 van de matrix | Input, pull-up actief via GPPUB |
+| 5 | GPB4 | Niet aangesloten | — |
+| 6 | GPB5 | Niet aangesloten | — |
+| 7 | GPB6 | Niet aangesloten | — |
+| 8 | GPB7 | Niet aangesloten | — |
+| 9 | VDD | 3.3V | Voeding |
+| 10 | VSS | GND | Massa |
+| 11 | /CS | PA8 (CN10 pin 23) | Chip Select, actief LAAG |
+| 12 | SCK | PA5 (CN10 pin 11) | SPI klok |
+| 13 | SI | PA7 (CN10 pin 15) | SPI data in (MOSI) |
+| 14 | SO | PA6 (CN10 pin 13) | SPI data uit (MISO) |
+| 15 | A0 | GND | Adresbit 0 → hardware adres = 0b000 |
+| 16 | A1 | GND | Adresbit 1 → hardware adres = 0b000 |
+| 17 | A2 | GND | Adresbit 2 → hardware adres = 0b000 |
+| 18 | /RESET | 3.3V | Reset inactief houden (altijd HIGH) |
+| 19 | INTB | Niet aangesloten | Interrupt Port B (niet gebruikt) |
+| 20 | INTA | Niet aangesloten | Interrupt Port A (niet gebruikt) |
+| 21 | GPA0 | Kolom 0 van de matrix | Output, scant kolom 0 |
+| 22 | GPA1 | Kolom 1 van de matrix | Output, scant kolom 1 |
+| 23 | GPA2 | Kolom 2 van de matrix | Output, scant kolom 2 |
+| 24 | GPA3 | Kolom 3 van de matrix | Output, scant kolom 3 |
+| 25 | GPA4 | Niet aangesloten | — |
+| 26 | GPA5 | Niet aangesloten | — |
+| 27 | GPA6 | Niet aangesloten | — |
+| 28 | GPA7 | Niet aangesloten | — |
+
+### 3.3 4x4 Toetsmatrix Aansluitingen
+
+De matrix werkt met **kolom-scanning**: één kolom tegelijk LAAG, rijen lezen.
+
+| Matrix Positie | Knop nr. | MIDI Noot | Kolom (GPA) | Rij (GPB) |
+|---|---|---|---|---|
+| Rij 0, Kolom 0 | Knop 0 | 60 (C4) | GPA0 | GPB0 |
+| Rij 0, Kolom 1 | Knop 1 | 61 (C#4) | GPA1 | GPB0 |
+| Rij 0, Kolom 2 | Knop 2 | 62 (D4) | GPA2 | GPB0 |
+| Rij 0, Kolom 3 | Knop 3 | 63 (D#4) | GPA3 | GPB0 |
+| Rij 1, Kolom 0 | Knop 4 | 64 (E4) | GPA0 | GPB1 |
+| Rij 1, Kolom 1 | Knop 5 | 65 (F4) | GPA1 | GPB1 |
+| Rij 1, Kolom 2 | Knop 6 | 66 (F#4) | GPA2 | GPB1 |
+| Rij 1, Kolom 3 | Knop 7 | 67 (G4) | GPA3 | GPB1 |
+| Rij 2, Kolom 0 | Knop 8 | 68 (G#4) | GPA0 | GPB2 |
+| Rij 2, Kolom 1 | Knop 9 | 69 (A4) | GPA1 | GPB2 |
+| Rij 2, Kolom 2 | Knop 10 | 70 (A#4) | GPA2 | GPB2 |
+| Rij 2, Kolom 3 | Knop 11 | 71 (B4) | GPA3 | GPB2 |
+| Rij 3, Kolom 0 | Knop 12 | 72 (C5) | GPA0 | GPB3 |
+| Rij 3, Kolom 1 | Knop 13 | 73 (C#5) | GPA1 | GPB3 |
+| Rij 3, Kolom 2 | Knop 14 | 74 (D5) | GPA2 | GPB3 |
+| Rij 3, Kolom 3 | Knop 15 | 75 (D#5) | GPA3 | GPB3 |
+
+### 3.4 SPI Configuratie
 
 De SPI1 interface wordt gebruikt voor communicatie met de MCP23S17:
 
@@ -120,7 +178,7 @@ hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;       // Geen automation
 
 **Waarom 250 kHz?** Het MCP23S17 ondersteunt tot 10 MHz, maar 250 kHz is ruim voldoende voor een matrix scan van <5 ms en garandeert stabiele communicatie zonder signaalkwaliteitsproblemen.
 
-### 3.3 USB Clocking
+### 3.5 USB Clocking
 
 USB Full-Speed vereist exact 48 MHz timing. Dit wordt bereikt via:
 
