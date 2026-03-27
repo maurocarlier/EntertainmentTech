@@ -377,132 +377,35 @@ void scan_matrix(void) {
 
 ## 5. STM32CubeMX Configuratie
 
-Deze sectie beschrijft niet alleen welke instellingen gebruikt zijn, maar ook waarom ze nodig zijn en welke code CubeMX daaruit genereert.
+### 5.1 Oscillators
+- **HSI**: Ingeschakeld, DIV=2 (32 MHz CPU-klok)
+- **HSI48**: Ingeschakeld (48 MHz USB-klok)
+- **PLL**: Uitgeschakeld (niet nodig met HSI48)
 
-### 5.1 Rol van STM32CubeMX in dit project
-
-STM32CubeMX is in dit project de configuratietool voor:
-- Clock tree (CPU, USB, SPI)
-- Pin multiplexing (welke pin welke perifere functie krijgt)
-- HAL-initialisatiecode (MX_* functies + MSP init)
-- NVIC interruptconfiguratie
-
-CubeMX zelf draait niet op de microcontroller. Het genereert C-code en bewaart de configuratie in `USB_MIDI2.ioc`.
-
-### 5.2 MCU en basisproject
-
-- **MCU selectie**: STM32H533RETx
-- **Project context**: TrustZone disabled (non-secure applicatie)
-- **Toolchain target**: MDK-ARM (Keil)
-- **Code generatie**: HAL drivers + USER CODE markers
-
-Belangrijke optie in Project Manager:
-- **Keep User Code** staat aan, zodat code binnen USER CODE blokken behouden blijft.
-
-### 5.3 RCC en oscillatorconfiguratie
-
-Voor dit project zijn twee interne oscillatoren cruciaal:
-- **HSI** (interne high-speed oscillator) voor CPU en algemene clocks
-- **HSI48** (dedicated 48 MHz oscillator) voor USB Full-Speed
-
-Ingestelde keuzes:
-- HSI: aan, gedeeld door 2 voor een SYSCLK van 32 MHz
-- HSI48: aan voor USB
-- PLL: uit (niet nodig voor deze use-case)
-
-Waarom deze keuze:
-- USB Full-Speed vereist een stabiele 48 MHz bron
-- 32 MHz CPU is ruim voldoende voor matrixscanning + MIDI
-- Eenvoudige clock tree verlaagt configuratierisico
-
-### 5.4 Clock tree detail
-
-Resultaat van de clockconfiguratie:
-
+### 5.2 Klokken
 ```
 SYSCLK = HSI / 2 = 32 MHz
-HCLK (AHB) = 32 MHz
-PCLK1 (APB1) = 32 MHz
-PCLK2 (APB2) = 32 MHz
-PCLK3 (APB3) = 32 MHz
-USB clock source = HSI48 = 48 MHz
-CKPER = HSI = 32 MHz
+HCLK (AHB) = SYSCLK / 1 = 32 MHz
+PCLK1 (APB1) = HCLK / 1 = 32 MHz
+PCLK2 (APB2) = HCLK / 1 = 32 MHz
+PCLK3 (APB3) = HCLK / 1 = 32 MHz
+CKPER = HSI = 32 MHz (voor SPI prescaler)
 ```
 
-Toelichting:
-- **USB** gebruikt expliciet HSI48 via peripheral clock selection.
-- **SPI1** gebruikt CKPER als bron, waardoor de prescalerberekening voorspelbaar blijft.
+### 5.3 Peripherals
+- **USB DRD FS**: Device mode, Full-Speed
+- **SPI1**: Master, Full-Duplex, Prescaler 128
+- **GPIO**: PA5/PA6/PA7 (SPI), PA8 (CS), PA11/PA12 (USB)
 
-### 5.5 Pinout en perifere toewijzing in CubeMX
+### 5.4 IOC Bestand
 
-In de Pinout view zijn de volgende perifere functies geactiveerd:
+De `.ioc` file slaat alle CubeMX-instellingen op en kan opnieuw code genereren. **LET OP**: De handmatig geschreven code (TinyUSB, MIDI scan) blijft behouden in USER CODE secties.
 
-- **SPI1**
-    - PA5 = SPI1_SCK (AF5)
-    - PA6 = SPI1_MISO (AF5)
-    - PA7 = SPI1_MOSI (AF5)
-- **GPIO output**
-    - PA8 = MCP_CS (chip select)
-    - PB0 = LED_STATUS
-- **USB DRD FS**
-    - PA11 = USB_DM
-    - PA12 = USB_DP
-
-Voor SPI-signaalintegriteit is op de SPI-lijnen hoge GPIO-snelheid gebruikt.
-
-### 5.6 Perifere instellingen (SPI/USB/GPIO/NVIC)
-
-#### SPI1
-- Mode: Master
-- Direction: 2 lines (full duplex)
-- Data size: 8-bit
-- Polarity/Phase: CPOL low, CPHA first edge
-- NSS: software
-- Prescaler: 128 (ongeveer 250 kHz bij 32 MHz bron)
-- NSS pulse: disabled
-
-Deze instelling is bewust conservatief gekozen voor stabiele communicatie met de MCP23S17 op breadboard-opstelling.
-
-#### USB DRD FS
-- Mode: Device only
-- Speed: Full-Speed
-- PHY: Embedded
-- USB interrupt: enabled via NVIC
-
-#### GPIO
-- MCP_CS default op HIGH (device niet geselecteerd)
-- LED pin als push-pull output
-- USB pins in dedicated USB functie
-
-#### NVIC
-- USB_DRD_FS interrupt is ingeschakeld
-- SysTick actief voor HAL timing (`HAL_GetTick()`), gebruikt in de scanrate-logica
-
-### 5.7 Welke code CubeMX genereert
-
-Uit de `.ioc` configuratie genereert CubeMX o.a.:
-- `SystemClock_Config()`
-- `MX_GPIO_Init()`
-- `MX_USB_PCD_Init()`
-- `MX_SPI1_Init()`
-- MSP-initialisatie in `stm32h5xx_hal_msp.c`
-
-Deze functies zetten de hardware op, maar bevatten niet de applicatielogica. De eigen logica (MCP-init, matrixscan, MIDI events) blijft in USER CODE delen van `main.c`.
-
-### 5.8 Regenereren: wat blijft veilig en wat niet
-
-Bij opnieuw genereren vanuit CubeMX:
-- **Blijft behouden**: code tussen `/* USER CODE BEGIN */` en `/* USER CODE END */`
-- **Kan overschreven worden**: alles buiten USER CODE markers
-
-Praktische workflow:
-1. Perifere/pin/clock wijzigingen in CubeMX doen
-2. Code genereren
-3. Controleren of initcode nog overeenkomt met gewenste hardware
-4. Builden en testen (USB enumeratie + SPI read/write)
-
-Belangrijke les uit dit project:
-- Foutieve MSP-configuratie (bijvoorbeeld SPI2-code terwijl project SPI1 gebruikt) kan leiden tot complete communicatiefout, zelfs als `MX_SPI1_Init()` correct lijkt.
+```
+/* USER CODE BEGIN */
+// Dit wordt NIET overschreven bij hergeneren
+/* USER CODE END */
+```
 
 ---
 
