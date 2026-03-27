@@ -45,9 +45,12 @@
 #define MIDI_CHANNEL    0
 #define MIDI_NOTE_BASE  60
 
-// ADC Potentiometer
-#define HYSTERESIS     2
-#define MIDI_CC_POT1   16
+// ADC Potentiometers (Fase 2)
+#define NUM_POTS       2    // Aantal potentiometers in gebruik
+#define MIDI_CC_START  16   // Eerste CC nummer (dit wordt CC16 en CC17)
+#define HYSTERESIS     4    // Jitter filter
+#define DEADZONE_LOW   20   // Nog forser verhoogd: alles hieronder is gegarandeerd 0
+#define DEADZONE_HIGH  240  // Ruwe waarde (0-255) erboven wordt 255
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,13 +72,13 @@ TIM_HandleTypeDef htim6;
 
 PCD_HandleTypeDef hpcd_USB_DRD_FS;
 
-/* ADC value - automatically updated by DMA */
-volatile uint8_t adc_value;
-uint8_t last_midi_value = 0;
-
 /* USER CODE BEGIN PV */
 /* Previous button state for each of the 16 matrix keys (used for edge detection) */
 static uint8_t matrix_prev[16] = {0};
+
+/* ADC Buffer - automatically updated by DMA */
+volatile uint8_t adc_buffer[NUM_POTS];
+uint8_t last_midi_value[NUM_POTS] = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -96,7 +99,7 @@ void mcp_init(void);
 void scan_matrix(void);
 
 void ADC_Start(void);
-void process_potentiometer(void);
+void process_potentiometers(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -104,21 +107,40 @@ void process_potentiometer(void);
 
 void ADC_Start(void) {
     HAL_TIM_Base_Start(&htim6);
-    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_value, 1);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, NUM_POTS);
 }
 
-void process_potentiometer(void) {
-    uint8_t new_value = adc_value >> 1;  // 8-bit naar 7-bit
+void process_potentiometers(void) {
+    for (int i = 0; i < NUM_POTS; i++) {
+        uint16_t raw_val = adc_buffer[i];
 
-    int16_t diff = (int16_t)new_value - (int16_t)last_midi_value;
-    if (diff < 0) diff = -diff;
-
-    if (diff >= HYSTERESIS) {
-        if (tud_midi_mounted()) {
-            uint8_t msg[3] = { 0xB0, MIDI_CC_POT1, new_value };
-            tud_midi_stream_write(0, msg, 3);
+        // Pas deadzones en mapping toe om te zorgen dat elke slider altijd perfect van 0 tot 255 gaat
+        if (raw_val <= DEADZONE_LOW) {
+            raw_val = 0;
+        } else if (raw_val >= DEADZONE_HIGH) {
+            raw_val = 255;
+        } else {
+            raw_val = ((raw_val - DEADZONE_LOW) * 255) / (DEADZONE_HIGH - DEADZONE_LOW);
         }
-        last_midi_value = new_value;
+
+        uint8_t new_value = raw_val >> 1; // 8-bit naar 7-bit (0 tot 127)
+
+        // Als we in the dode zones zitten forceer update om zeker op 0 te vallen initialisatie.
+        int16_t diff = (int16_t)new_value - (int16_t)last_midi_value[i];        
+        if (diff < 0) diff = -diff;
+
+        // Als we verschil detecteren *OF* de potmeter staat effectief en stabiel op 0 en had hier nog niet naartoe geupdate
+        if (diff >= HYSTERESIS || (new_value == 0 && last_midi_value[i] != 0)) {
+            
+            // kleine safety check: door de hysteresis kon een waarde "1" of "2" genegeerd zijn in vorige stap
+            if (new_value != last_midi_value[i]){
+                if (tud_midi_mounted()) {
+                    uint8_t msg[3] = { 0xB0, MIDI_CC_START + i, new_value };        
+                    tud_midi_stream_write(0, msg, 3);
+                }
+                last_midi_value[i] = new_value;
+            }
+        }
     }
 }
 
@@ -299,7 +321,7 @@ int main(void)
     scan_matrix();
 
     // Process potentiometer values for MIDI CC
-    process_potentiometer();
+    process_potentiometers();
 
     /* USER CODE END WHILE */
 
@@ -412,11 +434,11 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_8B;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.NbrOfConversion = 2;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIG_T6_TRGO;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
@@ -437,6 +459,15 @@ static void MX_ADC1_Init(void)
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_1; /* FIX: Added so Rank 2 reads PA1 instead of repeating PA0 */
+  sConfig.Rank = ADC_REGULAR_RANK_2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();

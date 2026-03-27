@@ -81,7 +81,7 @@
           </BeforeMake>
           <AfterMake>
             <RunUserProg1>0</RunUserProg1>
-            <RunUserProg2>0</RunUserProg2>
+            <RunUserProg2>1</RunUserProg2>
             <UserProg1Name></UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_NUCLEO_64,USE_HAL_DRIVER,STM32H533xx,CFG_TUSB_MCU=OPT_MCU_STM32H5,asm=__asm</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32H5xx_HAL_Driver/Inc;../Drivers/STM32H5xx_HAL_Driver/Inc/Legacy;../Drivers/BSP/STM32H5xx_Nucleo;../Drivers/CMSIS/Device/ST/STM32H5xx/Include;../Drivers/CMSIS/Include;../Middlewares/tinyusb/src;../Middlewares/tinyusb/src/device;../Middlewares/tinyusb/src/class/midi;../Middlewares/tinyusb;..\Middlewares\tinyusb</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32H5xx_HAL_Driver/Inc;../Drivers/STM32H5xx_HAL_Driver/Inc/Legacy;../Drivers/BSP/STM32H5xx_Nucleo;../Drivers/CMSIS/Device/ST/STM32H5xx/Include;../Drivers/CMSIS/Include;../Middlewares/tinyusb/src;../Middlewares/tinyusb/src/device;../Middlewares/tinyusb/src/class/midi;../Middlewares/tinyusb</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
