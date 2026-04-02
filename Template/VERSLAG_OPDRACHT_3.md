@@ -1,15 +1,32 @@
 # Verslag Opdracht 3: ADC Potentiometers – MIDI Control Change
 
-## 1. Pin-toewijzing
-Voor deze configuratie zijn de potentiometers als volgt aangesloten op de STM32:
-* **Potentiometer 1:** Pin **PA0** → ADC1 Kanaal 0 → MIDI CC 16
-* **Potentiometer 2:** Pin **PA1** → ADC1 Kanaal 1 → MIDI CC 17
+## 1. Pin-toewijzing en Fysieke Aansluiting
 
-## 2. Broncode en Implementatie
+Voor deze configuratie zijn de potentiometers als volgt aangesloten op de STM32 Nucleo:
+* **Fysieke Bedrading (per Potentiometer):**
+  * **Linker buitenste pin:** Aangesloten op **3.3V** (*Gebruik geen 5V ivm schadegevaar bij de ADC pinnen*).
+  * **Rechter buitenste pin:** Aangesloten op **GND** (Massa).
+  * **Middelste pin (Signaal):** Aangesloten op **PA0** en **PA1**.
+
+* **Verloop van het Digitale Signaal (Hardware naar MIDI):**
+  * **Potentiometer 1:** Pin **PA0** is intern gekoppeld aan **ADC1 Kanaal 0**. Onze code wijst hier in zijn Array-locatie de startwaarde aan toe (`16 + 0`) → Zender produceert **MIDI CC 16**.
+  * **Potentiometer 2:** Pin **PA1** is intern gekoppeld aan **ADC1 Kanaal 1**. Onze code wijst hier `16 + 1` aan toe → Zender produceert **MIDI CC 17**.
+
+## 2. CubeMX Configuratie
+
+Om deze opstelling correct hardwarematig aan te sturen zonder de CPU te belasten, zijn de volgende modules ingesteld en op elkaar afgestemd in STM32CubeMX:
+* **TIM6 (Trigger):** Deze Basic Timer verzorgt een strak ritme van 1 kHz als interne pacemaker (Prescaler 249, Period 999 bij een 250MHz klok). Via de Trigger Output (TRGO) op een *Update Event* laat hij de ADC continu weten wanneer de volgende sample mag gebeuren.
+* **ADC1 (Uitlezer):** 
+  * *Resolutie:* Beperkt tot 8 bits in plaats van de gebruikelijke 12 bits, aangezien ons einddoel beperkt is tot MIDI's 7-bit Control Change (waarden 0 t.e.m. 127).
+  * *Scan Conversion Mode:* Geactiveerd (`Enabled`) zodat hij meerdere meetpunten (Ranks) onmiddellijk in één getriggerde cyclus kan verwerken. We maken gebruik van 2 conversies: Rank 1 (Kanaal 0) en Rank 2 (Kanaal 1). 
+  * *External Trigger:* Ingesteld op de binnenkomende puls van TIM6. 
+* **GPDMA1 (Geheugen Verplaatser):** Dit DMA-kanaal zit aan de ADC1 peripheral vast in *Circular Mode* (vervoert data van Peripheral to Memory in een oneindige lus). De optie *Destination Address Increment* staat ingeschakeld, zodat Kanaal 0 en Kanaal 1 niet over elkaar heen schrijven in het geheugen, maar netjes opeenvolgend als bytes in onze gealloceerde `adc_buffer`-array worden geplaatst.
+
+## 3. Broncode en Implementatie
 
 Hieronder staat een overzicht van de geschreven code voor Fase 2 (met 2 potentiometers) in `main.c`, verdeeld in logische blokken met telkens een verklaring van wat de code doet.
 
-### 2.1 Defines en Globale Variabelen
+### 3.1 Defines en Globale Variabelen
 ```c
 // ADC Potentiometers (Fase 2)
 #define NUM_POTS       2    // Aantal potentiometers in gebruik
@@ -26,7 +43,7 @@ uint8_t last_midi_value[NUM_POTS] = {0};
 * **`HYSTERESIS` en `DEADZONE`:** Tijdens het testen bleek de hardware onderhevig aan elektrische ruis ("jitter") en haalden de potentiometers hun 'absolute nul'-stand niet wegens interne afwijkingen. Hierop stelden we robuuste beveiligingsmarges en een kalibratie deadzone in.
 * **`adc_buffer`:** Is gedeclareerd als `volatile` en in vorm van een Array (`adc_buffer[2]`). Zodat het DMA (Direct Memory Access) proces direct en automatisch per cyclus beide metingen in deze array wegschrijft, zonder dat de CPU dit steeds handmatig moet afhandelen of dat de compiler het wegoptimaliseert.
 
-### 2.2 Initiëren van de Hardware (Timer en ADC/DMA)
+### 3.2 Initiëren van de Hardware (Timer en ADC/DMA)
 ```c
 void ADC_Start(void) {
     HAL_TIM_Base_Start(&htim6);
@@ -37,7 +54,7 @@ void ADC_Start(void) {
 * **`HAL_TIM_Base_Start`:** We ontwaken en starten interne hardware-Timer 6 (1 kHz). Deze functioneert als de interne pacemaker (Trigger) om de analoge inlezing exact en strak te timen.
 * **`HAL_ADC_Start_DMA`:** We activeren het inlezen op ADC1. Door in DMA-Modus te opereren, vertellen we het toestel dat de verzamelde bits rechtstreeks naar het adres van `adc_buffer` overgepompt moeten worden. Omdat `NUM_POTS` op 2 staat, haalt de "Scan Mode" beide pinnen per cyclus binnen.
 
-### 2.3 Data verwerken & MIDI uitsturen
+### 3.3 Data verwerken & MIDI uitsturen
 ```c
 void process_potentiometers(void) {
     for (int i = 0; i < NUM_POTS; i++) {
@@ -80,7 +97,7 @@ void process_potentiometers(void) {
 
 ---
 
-## 3. Antwoorden op de extra vragen
+## 4. Antwoorden op de extra vragen
 
 **Vraag 1: De shift-operatie `adc_value >> 1` zet 8-bit om naar 7-bit. Welke resultaatwaarde krijg je maximaal bij 255 en bij 254? Is dit een probleem?**
 * **Bij `adc_value = 255`**: Binair is dit `1111 1111`. Een bitshift per positie naar rechts (`>> 1`) geeft `0111 1111`, wat decimaal neerkomt op exact **127**.
@@ -101,6 +118,6 @@ Wanneer men eerst de Timer start en daarna de ADC + DMA klaarmaakt om op deze co
 
 ---
 
-## 4. Te Voorzien door de Student (Bijlagen)
+## 5. Te Voorzien door de Student (Bijlagen)
 * [ ] **Screenshot inleveren:** Voeg hiernaast nog een screenshot in van *MIDI Monitor / MIDI-OX* waarin te zien is dat CC16 en CC17 gelijktijdig signaal afgeven.
 * [ ] **Demovideo link:** Lever jouw bewijsvideo aan op de afgesproken plek via ufora / Toledo.
