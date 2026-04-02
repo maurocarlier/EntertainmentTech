@@ -5,14 +5,39 @@ Voor deze configuratie zijn de potentiometers als volgt aangesloten op de STM32:
 * **Potentiometer 1:** Pin **PA0** → ADC1 Kanaal 0 → MIDI CC 16
 * **Potentiometer 2:** Pin **PA1** → ADC1 Kanaal 1 → MIDI CC 17
 
-## 2. Bijzonderheden in de Implementatie (Broncode)
-Tijdens het testen en aansluiten van de componenten bleek de hardware onderhevig te zijn aan elektrische ruis ("jitter"), bovendien haalden de potentiometers hun 'absolute nul'-stand niet wegens interne afwijkingen bij lage weerstand.
+## 2. Broncode en Implementatie
 
-Om dit wiskundig te corrigeren zijn er twee specifieke softwareverbeteringen geïmplementeerd die niet in het standaardontwerp zaten:
-1. **Deadzone Mapping:** De ruwe 8-bit analoogwaardes onder `20` worden hardwarematig geforceerd naar `0`, en waarden boven `240` worden geforceerd naar `255`. Hierdoor sturen beide schuivers ongeacht fabrieksfouten of weerstand in hun massakabel altijd loepzuiver een `0` of een `127` midi signaal door in de eindstanden.
-2. **Hysteresis filter + Deadzone Override:** De Hysteresis parameter is verhoogd naar `4` in combinatie met een 'fall-to-zero safety'. Als de berekening detecteerde dat de deadzone was geraakt (zuivere 0-waarde), telt deze sterker door dan de hysteresis check die anders deze laatste kleine stap over het hoofd had gemaskerd.
+Hieronder staat een overzicht van de geschreven code voor Fase 2 (met 2 potentiometers) in `main.c`, verdeeld in logische blokken met telkens een verklaring van wat de code doet.
 
-### Broncode `process_potentiometers`
+### 2.1 Defines en Globale Variabelen
+```c
+// ADC Potentiometers (Fase 2)
+#define NUM_POTS       2    // Aantal potentiometers in gebruik
+#define MIDI_CC_START  16   // Eerste CC nummer (dit wordt CC16 en CC17)
+#define HYSTERESIS     4    // Jitter filter drempel
+#define DEADZONE_LOW   20   // Ruwe waarde (0-255) eronder wordt 0
+#define DEADZONE_HIGH  240  // Ruwe waarde (0-255) erboven wordt 255
+
+volatile uint8_t adc_buffer[NUM_POTS];
+uint8_t last_midi_value[NUM_POTS] = {0};
+```
+**Uitwerking:**
+* **`NUM_POTS` en `MIDI_CC_START`:** Om eenvoudig uit te breiden is het aantal potmeters configureerbaar gemaakt. Vanaf basisadres 16 (CC16) krijgt elke extra pin een oplopend bedieningsnummer door compiler logica.
+* **`HYSTERESIS` en `DEADZONE`:** Tijdens het testen bleek de hardware onderhevig aan elektrische ruis ("jitter") en haalden de potentiometers hun 'absolute nul'-stand niet wegens interne afwijkingen. Hierop stelden we robuuste beveiligingsmarges en een kalibratie deadzone in.
+* **`adc_buffer`:** Is gedeclareerd als `volatile` en in vorm van een Array (`adc_buffer[2]`). Zodat het DMA (Direct Memory Access) proces direct en automatisch per cyclus beide metingen in deze array wegschrijft, zonder dat de CPU dit steeds handmatig moet afhandelen of dat de compiler het wegoptimaliseert.
+
+### 2.2 Initiëren van de Hardware (Timer en ADC/DMA)
+```c
+void ADC_Start(void) {
+    HAL_TIM_Base_Start(&htim6);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, NUM_POTS);
+}
+```
+**Uitwerking:**
+* **`HAL_TIM_Base_Start`:** We ontwaken en starten interne hardware-Timer 6 (1 kHz). Deze functioneert als de interne pacemaker (Trigger) om de analoge inlezing exact en strak te timen.
+* **`HAL_ADC_Start_DMA`:** We activeren het inlezen op ADC1. Door in DMA-Modus te opereren, vertellen we het toestel dat de verzamelde bits rechtstreeks naar het adres van `adc_buffer` overgepompt moeten worden. Omdat `NUM_POTS` op 2 staat, haalt de "Scan Mode" beide pinnen per cyclus binnen.
+
+### 2.3 Data verwerken & MIDI uitsturen
 ```c
 void process_potentiometers(void) {
     for (int i = 0; i < NUM_POTS; i++) {
@@ -47,6 +72,11 @@ void process_potentiometers(void) {
     }
 }
 ```
+**Uitwerking:**
+1. **Loop:** Gaat af aan de hand van het aantal potmeters. De inkomende DMA waarde per pin wordt opgeslagen als `raw_val`.
+2. **Deadzone Correctie:** Lage afwijkingen kleiner dan `20` worden hardwarematig geforceerd naar `0`, en waarden boven `240` worden geforceerd naar `255` om zuivere uitersten te bereiken.
+3. **Conversie en Ruis-Filtering (Hysteresis):** Na het vertalen (`>> 1` shift) van 8-bit naar MIDI 7-bit schaal (0-127), rekent het blok het absolute verschil tussen de vorige verzonden positie en huidige inlezing uit. Dankzij de regel dat de sprong groter moet zijn dan de drempel `HYSTERESIS (4)`, raakt de hardware verlost van zogenoemde "Jitter" en rustig zwevende spanningsschommelingen. 
+4. **Verzending:** Voldoet deze drempel, wordt via USB via `tud_midi_stream_write` de `0xB0` control change payload succesvol opgestuurd. Onze kleine `(new_value == 0)` safety-net verzekert dat we het signaal bij nulpunt zeker muten in de deadzone en hij nooit op 1 kan blijven haperen door een hysteresis val.
 
 ---
 
