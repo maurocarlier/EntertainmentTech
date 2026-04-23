@@ -68,7 +68,9 @@ DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim6;
+DMA_HandleTypeDef handle_GPDMA1_Channel1;
 
 PCD_HandleTypeDef hpcd_USB_DRD_FS;
 
@@ -77,8 +79,18 @@ PCD_HandleTypeDef hpcd_USB_DRD_FS;
 static uint8_t matrix_prev[16] = {0};
 
 /* ADC Buffer - automatically updated by DMA */
-volatile uint8_t adc_buffer[NUM_POTS];
+volatile uint8_t adc_buffer[NUM_POTS * 2]; // Oudere GPDMA bugs negeren we door buffer te verdubbelen voor de veiligheid. Maar hij leest wel correct in theorie.
 uint8_t last_midi_value[NUM_POTS] = {0};
+
+/* WS2812 / SK6812 LED variables */
+#define MAX_LED 1
+#define USE_BRIGHTNESS 0 
+
+uint8_t LED_Data[MAX_LED][4];
+uint8_t LED_Mod[MAX_LED][4];
+
+uint16_t pwmData[(24*MAX_LED)+50];
+volatile int datasentflag = 1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,6 +102,7 @@ static void MX_SPI1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_USB_PCD_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void midi_note_on(uint8_t note, uint8_t velocity);
 void midi_note_off(uint8_t note);
@@ -100,6 +113,9 @@ void scan_matrix(void);
 
 void ADC_Start(void);
 void process_potentiometers(void);
+
+void Set_LED(int LEDnum, int Red, int Green, int Blue);
+void WS2812_Send(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -107,6 +123,9 @@ void process_potentiometers(void);
 
 void ADC_Start(void) {
     HAL_TIM_Base_Start(&htim6);
+    /* OPMERKING: GPDMA streamt naar adc_buffer. Cast is uint32_t omdat de HAL functie dit vereist. 
+       Maar onze buffer was 8-bit, terwijl DMA misschien HalfWord is in CubeMX?
+       Als dit fout gaat, controleer DMA breedte voor ADC! */
     HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, NUM_POTS);
 }
 
@@ -142,6 +161,57 @@ void process_potentiometers(void) {
             }
         }
     }
+}
+
+/* Set LED color values (Red, Green, Blue from 0-255) */
+void Set_LED(int LEDnum, int Red, int Green, int Blue)
+{
+    LED_Data[LEDnum][0] = LEDnum;
+    LED_Data[LEDnum][1] = Green; // SK6812 is GRB or RGB, depending on exactly which variant, GRB is most common
+    LED_Data[LEDnum][2] = Red;
+    LED_Data[LEDnum][3] = Blue;
+}
+
+/* Generate PWM data and start DMA transfer */
+void WS2812_Send(void)
+{
+    uint32_t indx = 0;
+    uint32_t color;
+
+    for (int i = 0; i < MAX_LED; i++)
+    {
+#if USE_BRIGHTNESS
+        color = ((LED_Mod[i][1] << 16) | (LED_Mod[i][2] << 8) | (LED_Mod[i][3]));
+#else
+        color = ((LED_Data[i][1] << 16) | (LED_Data[i][2] << 8) | (LED_Data[i][3]));
+#endif
+        for (int j = 23; j >= 0; j--)
+        {
+            // Omdat ARR 312 is:
+            // "1" = 2/3 * 312 ≈ 208
+            // "0" = 1/3 * 312 ≈ 104
+            if (color & (1 << j)) {
+                pwmData[indx] = 208;  
+            } else {
+                pwmData[indx] = 104;  
+            }
+            indx++;
+        }
+    }
+
+    // Voeg de RESET code (minimaal 50us low = 50 0'en bij 800kHz is safe) toe
+    for (int i = 0; i < 50; i++)
+    {
+        pwmData[indx] = 0;
+        indx++;
+    }
+
+    // Start de DMA, zet de flag dicht totdat de PulseFinished callback hem weer open zet
+    datasentflag = 0;
+    HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1, (uint32_t *)pwmData, indx);
+    
+    // Optioneel: wachten tot de data verstuurd is (blokkerend, maar handig voor de eerste test)
+    while (!datasentflag){}
 }
 
 /* Send a MIDI Note On message on the configured channel */
@@ -203,6 +273,9 @@ void scan_matrix(void)
   uint8_t packet[4];
   while (tud_midi_available()) tud_midi_packet_read(packet);
 
+  // -- NIEUW: als we wachten op DMA of de LED is aan het blokkeren, scan dan nog NIET om MIDI misfits te vermijden --
+  if (datasentflag == 0) return;
+
   // Scan each column
   for (uint8_t col = 0; col < 4; col++)
   {
@@ -218,6 +291,9 @@ void scan_matrix(void)
     // Restore all columns HIGH
     mcp_write(MCP_OLATA, 0xFF);
 
+    // --- DE-BOUNCE: als we bezig zijn met LED updaten, skip MIDI logic even ---
+    if (datasentflag == 0) return;
+
     for (uint8_t row = 0; row < 4; row++)
     {
       uint8_t btn     = (uint8_t)(row * 4 + col);
@@ -227,11 +303,20 @@ void scan_matrix(void)
       {
         midi_note_on((uint8_t)(MIDI_NOTE_BASE + btn), 100);
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+        
+        // --- EXTRA: Laat de test LED oplichten afhankelijk van welke knop is ingedrukt ---
+        // We pakken testgewijs de knop index (btn) om een kleur te genereren
+        Set_LED(0, 10 + (btn * 10), 0, 50); // R en B variëren
+        WS2812_Send();
       }
       else if (!pressed && matrix_prev[btn])
       {
         midi_note_off((uint8_t)(MIDI_NOTE_BASE + btn));
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+        
+        // --- EXTRA: Zet test LED weer uit nadat knop wordt losgelaten ---
+        Set_LED(0, 0, 0, 0);
+        WS2812_Send();
       }
       matrix_prev[btn] = pressed;
     }
@@ -266,8 +351,21 @@ int main(void)
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  /* Initialize LED_STATUS (PB0) - LED turns on when a button is pressed */
+  /* PB4 is by default NJTRST (JTAG) and has a pull-up resistor causing the SK6812 to glitch green!
+     Force PB4 to a standard output LOW instantly to kill the floating/pullup voltage.
+     Later MX_TIM3_Init will cleanly override this to Alternate Function PWM. */
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  {
+    GPIO_InitTypeDef pb4 = {0};
+    pb4.Pin   = GPIO_PIN_4;
+    pb4.Mode  = GPIO_MODE_OUTPUT_PP;
+    pb4.Pull  = GPIO_NOPULL;
+    pb4.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &pb4);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
+  }
+
+  /* Initialize LED_STATUS (PB0) - LED turns on when a button is pressed */
   {
     GPIO_InitTypeDef gi = {0};
     gi.Pin   = GPIO_PIN_0;
@@ -285,6 +383,7 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM6_Init();
   MX_USB_PCD_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   /* Initialize MCP23S17 I/O expander before USB starts */
   mcp_init();
@@ -294,6 +393,16 @@ int main(void)
 
   /* Start ADC and Timer for Potentiometer */
   ADC_Start();
+
+  /* Geef spanningen (5V USB rail) rustig de tijd om de chip 100% operationeel te maken */
+  HAL_Delay(500);
+
+  /* Forceer UIT meerdere keren voor de zekerheid */
+  Set_LED(0, 0, 0, 0);
+  for(int i=0; i<3; i++) {
+      WS2812_Send();
+      HAL_Delay(5);
+  }
   /* USER CODE END 2 */
 
   /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
@@ -466,7 +575,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_1; /* FIX: Added so Rank 2 reads PA1 instead of repeating PA0 */
+  sConfig.Channel = ADC_CHANNEL_1; // <-- Dit was de boosdoener, hij stond nog op 0!
   sConfig.Rank = ADC_REGULAR_RANK_2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -496,6 +605,8 @@ static void MX_GPDMA1_Init(void)
   /* GPDMA1 interrupt Init */
     HAL_NVIC_SetPriority(GPDMA1_Channel0_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
+    HAL_NVIC_SetPriority(GPDMA1_Channel1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
 
   /* USER CODE BEGIN GPDMA1_Init 1 */
 
@@ -551,6 +662,65 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 312;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
 
 }
 
@@ -677,7 +847,13 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM3) {
+    HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_1);
+    datasentflag = 1;
+  }
+}
 /* USER CODE END 4 */
 
 /**
