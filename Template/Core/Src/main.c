@@ -79,11 +79,11 @@ PCD_HandleTypeDef hpcd_USB_DRD_FS;
 static uint8_t matrix_prev[16] = {0};
 
 /* ADC Buffer - automatically updated by DMA */
-volatile uint8_t adc_buffer[NUM_POTS * 2]; // Oudere GPDMA bugs negeren we door buffer te verdubbelen voor de veiligheid. Maar hij leest wel correct in theorie.
+volatile uint32_t adc_buffer[16]; // Extra groot en 32-bit gemaakt om RAM overflow & random MIDI fouten the voorkomen!
 uint8_t last_midi_value[NUM_POTS] = {0};
 
 /* WS2812 / SK6812 LED variables */
-#define MAX_LED 1
+#define MAX_LED 16
 #define USE_BRIGHTNESS 0 
 
 uint8_t LED_Data[MAX_LED][4];
@@ -131,7 +131,7 @@ void ADC_Start(void) {
 
 void process_potentiometers(void) {
     for (int i = 0; i < NUM_POTS; i++) {
-        uint16_t raw_val = adc_buffer[i];
+        uint16_t raw_val = adc_buffer[i] & 0xFFFF; // Mask alles boven 16-bit af voor de zekerheid
 
         // Pas deadzones en mapping toe om te zorgen dat elke slider altijd perfect van 0 tot 255 gaat
         if (raw_val <= DEADZONE_LOW) {
@@ -304,9 +304,8 @@ void scan_matrix(void)
         midi_note_on((uint8_t)(MIDI_NOTE_BASE + btn), 100);
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
         
-        // --- EXTRA: Laat de test LED oplichten afhankelijk van welke knop is ingedrukt ---
-        // We pakken testgewijs de knop index (btn) om een kleur te genereren
-        Set_LED(0, 10 + (btn * 10), 0, 50); // R en B variëren
+        // --- EXTRA: Laat de bijbehorende LED oplichten afhankelijk van welke knop is ingedrukt ---
+        Set_LED(btn, 10 + (btn * 10), 0, 50); // R en B variëren
         WS2812_Send();
       }
       else if (!pressed && matrix_prev[btn])
@@ -314,8 +313,8 @@ void scan_matrix(void)
         midi_note_off((uint8_t)(MIDI_NOTE_BASE + btn));
         HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
         
-        // --- EXTRA: Zet test LED weer uit nadat knop wordt losgelaten ---
-        Set_LED(0, 0, 0, 0);
+        // --- EXTRA: Zet de bijbehorende LED weer uit nadat knop wordt losgelaten ---
+        Set_LED(btn, 0, 0, 0);
         WS2812_Send();
       }
       matrix_prev[btn] = pressed;
@@ -398,7 +397,7 @@ int main(void)
   HAL_Delay(500);
 
   /* Forceer UIT meerdere keren voor de zekerheid */
-  Set_LED(0, 0, 0, 0);
+  for(int k=0; k<MAX_LED; k++) { Set_LED(k, 0, 0, 0); }
   for(int i=0; i<3; i++) {
       WS2812_Send();
       HAL_Delay(5);

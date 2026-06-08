@@ -3,7 +3,7 @@
 <title>Static Call Graph - [USB_MIDI2\USB_MIDI2.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image USB_MIDI2\USB_MIDI2.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6220000: Last Updated: Thu Apr 23 19:15:35 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6220000: Last Updated: Mon Jun  8 14:45:27 2026
 <BR><P>
 <H3>Maximum Stack Usage =        700 bytes + Unknown(Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -1667,8 +1667,8 @@ Global Symbols
 </UL>
 <BR>[Address Reference Count : 1]<UL><LI> startup_stm32h533xx.o(RESET)
 </UL>
-<P><STRONG><a name="[113]"></a>WS2812_Send</STRONG> (Thumb, 384 bytes, Stack size 16 bytes, main.o(.text.WS2812_Send))
-<BR><BR>[Stack]<UL><LI>Max Depth = 40 + Unknown Stack Size
+<P><STRONG><a name="[113]"></a>WS2812_Send</STRONG> (Thumb, 406 bytes, Stack size 24 bytes, main.o(.text.WS2812_Send))
+<BR><BR>[Stack]<UL><LI>Max Depth = 48 + Unknown Stack Size
 <LI>Call Chain = WS2812_Send &rArr; HAL_TIM_PWM_Start_DMA &rArr; HAL_DMAEx_List_Start_IT
 </UL>
 <BR>[Calls]<UL><LI><a href="#[104]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_TIM_PWM_Start_DMA
@@ -1801,7 +1801,7 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[120]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;dcd_init
 </UL>
 
-<P><STRONG><a name="[93]"></a>main</STRONG> (Thumb, 1382 bytes, Stack size 240 bytes, main.o(.text.main))
+<P><STRONG><a name="[93]"></a>main</STRONG> (Thumb, 1462 bytes, Stack size 240 bytes, main.o(.text.main))
 <BR><BR>[Stack]<UL><LI>Max Depth = 700 + Unknown Stack Size
 <LI>Call Chain = main &rArr; HAL_ADC_Init &rArr; HAL_ADC_MspInit &rArr; HAL_DMAEx_List_InsertNode &rArr; DMA_List_FindNode
 </UL>
@@ -1897,7 +1897,7 @@ Global Symbols
 <LI><a href="#[117]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;dcd_edpt_open
 </UL>
 
-<P><STRONG><a name="[12f]"></a>scan_matrix</STRONG> (Thumb, 1114 bytes, Stack size 56 bytes, main.o(.text.scan_matrix))
+<P><STRONG><a name="[12f]"></a>scan_matrix</STRONG> (Thumb, 1266 bytes, Stack size 56 bytes, main.o(.text.scan_matrix))
 <BR><BR>[Stack]<UL><LI>Max Depth = 296 + Unknown Stack Size
 <LI>Call Chain = scan_matrix &rArr; tud_midi_n_stream_write &rArr; tu_edpt_stream_write &rArr; tu_edpt_stream_write_xfer &rArr; usbd_edpt_xfer_fifo &rArr; dcd_edpt_xfer_fifo &rArr; dcd_transmit_packet &rArr; tu_fifo_read_n_access_mode &rArr; tu_fifo_peek_n_access_mode
 </UL>
